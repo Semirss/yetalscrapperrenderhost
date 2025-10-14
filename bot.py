@@ -34,7 +34,7 @@ TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@Outis_ss1643")
 # AWS S3 Configuration
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME", "your-telegram-bot-bucket")
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 
 # Hugging Face API
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
