@@ -40,7 +40,7 @@ AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
 # Fixed file names for S3
-USER_SESSION_FILE = "telegram_session.session"
+USER_SESSION_FILE = "session_render.session"
 FORWARDED_FILE = "forwarded_messagesbot2.json"
 SCRAPED_DATA_FILE = "scraped_data.json"
 
