@@ -22,7 +22,7 @@ load_dotenv()
 
 # Telegram API
 API_ID = int(os.getenv("API_ID", "24916488"))
-API_HASH = os.getenv("API_HASH", "3b7788498c56da1a02e904ff8e92d494"))
+API_HASH = os.getenv("API_HASH", "3b7788498c56da1a02e904ff8e92d494")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # MongoDB
