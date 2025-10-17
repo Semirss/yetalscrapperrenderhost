@@ -13,3 +13,4 @@ waitress==3.0.1
 fastparquet==2024.2.0
 pyarrow==20.0.0
 requests==2.31.0
+schedule==1.2.1
