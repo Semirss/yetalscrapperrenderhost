@@ -22,7 +22,7 @@ load_dotenv()
 
 # Telegram API
 API_ID = int(os.getenv("API_ID", "24916488"))
-API_HASH = os.getenv("API_HASH", "3b7788498c56da1a02e904ff8e92d494")
+API_HASH = os.getenv("API_HASH", "3b7788498c56da1a02e904ff8e92d494"))
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # MongoDB
@@ -39,10 +39,10 @@ AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 # Hugging Face API
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
-# File names for S3
+# Fixed file names for S3
 USER_SESSION_FILE = "telegram_session.session"
-FORWARDED_FILE = "forwarded_messages.json"
-SCRAPED_24H_FILE = "scraped_24h_enriched.parquet"
+FORWARDED_FILE = "forwarded_messagesbot2.json"
+SCRAPED_DATA_FILE = "scraped_data.json"
 
 # Initialize services
 app = Flask(__name__)
@@ -361,7 +361,7 @@ def save_json_to_s3(data, s3_key):
         s3.put_object(
             Bucket=AWS_BUCKET_NAME,
             Key=s3_key,
-            Body=json.dumps(data).encode('utf-8')
+            Body=json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8')
         )
         print(f"✅ Saved JSON to S3: {s3_key}")
         return True
@@ -369,79 +369,52 @@ def save_json_to_s3(data, s3_key):
         print(f"❌ Error saving JSON to S3: {e}")
         return False
 
-def load_parquet_from_s3():
-    """Load parquet data directly from S3"""
+def load_scraped_data_from_s3():
+    """Load scraped data JSON from S3"""
     try:
-        response = s3.get_object(Bucket=AWS_BUCKET_NAME, Key=f"data/{SCRAPED_24H_FILE}")
-        df = pd.read_parquet(io.BytesIO(response['Body'].read()))
-        print(f"✅ Loaded parquet from S3: {SCRAPED_24H_FILE}")
-        return df
-    except s3.exceptions.NoSuchKey:
-        print(f"⚠️ Parquet file {SCRAPED_24H_FILE} not found in S3, returning empty DataFrame")
-        return pd.DataFrame()
+        data = load_json_from_s3(f"data/{SCRAPED_DATA_FILE}")
+        if isinstance(data, list):
+            return data
+        else:
+            print("⚠️ Scraped data is not a list, returning empty list")
+            return []
     except Exception as e:
-        print(f"❌ Error loading parquet from S3: {e}")
-        return pd.DataFrame()
+        print(f"❌ Error loading scraped data from S3: {e}")
+        return []
 
-def save_parquet_to_s3(df):
-    """Save parquet data to S3"""
+def save_scraped_data_to_s3(data):
+    """Save scraped data as JSON to S3, appending to existing data"""
     try:
-        if df.empty:
-            print("⚠️ DataFrame is empty, nothing to save")
+        if not data:
+            print("⚠️ No new data to save")
             return False
             
-        print(f"💾 Attempting to save {len(df)} records to S3...")
+        print(f"💾 Attempting to save {len(data)} records to S3...")
         
-        # Use in-memory buffer
-        buffer = io.BytesIO()
+        # Load existing data
+        existing_data = load_scraped_data_from_s3()
         
-        # Try different parquet engines
-        engines = ['pyarrow', 'fastparquet', 'auto']
-        success = False
+        # Create a set of existing product_refs to avoid duplicates
+        existing_refs = {item.get('product_ref') for item in existing_data if item.get('product_ref')}
         
-        for engine in engines:
-            try:
-                print(f"🔄 Trying parquet engine: {engine}")
-                buffer.seek(0)
-                df.to_parquet(buffer, engine=engine, index=False)
-                success = True
-                print(f"✅ Success with engine: {engine}")
-                break
-            except Exception as e:
-                print(f"❌ Engine {engine} failed: {e}")
-                continue
+        # Filter out duplicates from new data
+        new_data = [item for item in data if item.get('product_ref') not in existing_refs]
         
-        if not success:
-            print("❌ All parquet engines failed")
-            return False
-        
-        buffer.seek(0)
-        
-        # S3 key with proper path
-        s3_key = f"data/{SCRAPED_24H_FILE}"
-        print(f"📤 Uploading to S3 bucket: {AWS_BUCKET_NAME}")
-        
-        # Upload to S3
-        s3.upload_fileobj(
-            buffer, 
-            AWS_BUCKET_NAME, 
-            s3_key,
-            ExtraArgs={'ContentType': 'application/octet-stream'}
-        )
-        
-        print(f"✅ Successfully uploaded {len(df)} records to S3")
-        
-        # Verify upload
-        try:
-            response = s3.head_object(Bucket=AWS_BUCKET_NAME, Key=s3_key)
-            file_size = response['ContentLength']
-            last_modified = response['LastModified']
-            print(f"✅ Upload verification successful!")
-            print(f"📏 File size: {file_size} bytes")
-            print(f"🕒 Last modified: {last_modified}")
+        if not new_data:
+            print("📭 No new unique data to append")
             return True
-        except Exception as e:
-            print(f"⚠️ Upload verification failed: {e}")
+            
+        # Combine existing and new data
+        combined_data = existing_data + new_data
+        
+        # Save combined data back to S3
+        success = save_json_to_s3(combined_data, f"data/{SCRAPED_DATA_FILE}")
+        
+        if success:
+            print(f"✅ Successfully appended {len(new_data)} new records to S3. Total records: {len(combined_data)}")
+            return True
+        else:
+            print("❌ Failed to save combined data to S3")
             return False
             
     except Exception as e:
@@ -563,14 +536,16 @@ async def forward_messages(days: int = 1):
 
         # Load forwarded messages from S3
         forwarded_data = load_json_from_s3(f"data/{FORWARDED_FILE}")
+        
         forwarded_ids = {
             int(msg_id): datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") 
             for msg_id, ts in forwarded_data.items()
         } if forwarded_data else {}
 
-        # Remove old forwarded IDs
+        # Remove old forwarded IDs (older than 7 days to keep file clean)
+        week_cutoff = now - timedelta(days=7)
         forwarded_ids = {msg_id: ts for msg_id, ts in forwarded_ids.items() 
-                        if ts >= cutoff.replace(tzinfo=None)}
+                        if ts >= week_cutoff.replace(tzinfo=None)}
 
         # Get channels from MongoDB
         channels = [ch["username"] for ch in collection.find({})]
@@ -629,7 +604,7 @@ async def forward_messages(days: int = 1):
                     print(f"⚠️ Unexpected error forwarding from {channel}: {e}")
                     continue
 
-        # Save updated forwarded IDs to S3
+        # Save updated forwarded IDs to S3 (same file)
         save_json_to_s3(
             {str(k): v.strftime("%Y-%m-%d %H:%M:%S") for k, v in forwarded_ids.items()},
             f"data/{FORWARDED_FILE}"
@@ -764,19 +739,22 @@ async def scrape_and_enrich(timeframe="24h"):
             if datetime.strptime(post["date"], "%Y-%m-%d %H:%M:%S") >= cutoff.replace(tzinfo=None)
         ]
 
-        # Save to S3
-        df = pd.DataFrame(results)
-        success = save_parquet_to_s3(df)
+        # Save to S3 as JSON (append to existing data)
+        success = save_scraped_data_to_s3(results)
         
         if success:
             # Print AI enhancement summary
-            if not df.empty and 'predicted_category' in df.columns:
-                category_counts = df['predicted_category'].value_counts()
+            if results:
+                category_counts = {}
+                for post in results:
+                    category = post.get('predicted_category', 'Unknown')
+                    category_counts[category] = category_counts.get(category, 0) + 1
+                
                 print("🤖 AI Enhancement Summary:")
                 for category, count in category_counts.items():
                     print(f"  • {category}: {count} products")
             
-            return True, f"✅ Scraped and enriched {len(results)} posts. Data saved to S3."
+            return True, f"✅ Scraped and enriched {len(results)} posts. Data appended to S3."
         else:
             return False, "❌ Failed to save data to S3."
 
@@ -805,6 +783,7 @@ async def scrape_and_enrich(timeframe="24h"):
 async def scheduled_task():
     """Main scheduled task that runs every 24 hours"""
     print("🕒 Starting scheduled 24-hour task...")
+    start_time = time.time()
     
     # Step 1: Forward new messages
     print("📤 Step 1: Forwarding new messages...")
@@ -818,23 +797,37 @@ async def scheduled_task():
     
     # Step 3: Print summary
     print("📊 Step 3: Generating summary...")
-    df = load_parquet_from_s3()
-    if not df.empty:
-        print(f"📈 Total AI-enhanced products: {len(df)}")
-        if 'predicted_category' in df.columns:
-            category_counts = df['predicted_category'].value_counts()
-            print("📊 Category distribution:")
-            for category, count in category_counts.items():
-                print(f"  • {category}: {count} products")
+    data = load_scraped_data_from_s3()
+    if data:
+        print(f"📈 Total AI-enhanced products: {len(data)}")
+        category_counts = {}
+        for post in data:
+            category = post.get('predicted_category', 'Unknown')
+            category_counts[category] = category_counts.get(category, 0) + 1
+        
+        print("📊 Category distribution:")
+        for category, count in category_counts.items():
+            print(f"  • {category}: {count} products")
     
-    print("✅ Scheduled task completed!")
+    elapsed_time = time.time() - start_time
+    print(f"✅ Scheduled task completed in {elapsed_time:.2f} seconds!")
+    
+    # Return success status for scheduling
+    return True
 
 def run_scheduled_task():
     """Run the scheduled task in a separate thread"""
+    print("⏰ Running scheduled task...")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(scheduled_task())
-    loop.close()
+    try:
+        success = loop.run_until_complete(scheduled_task())
+        return success
+    except Exception as e:
+        print(f"❌ Error in scheduled task: {e}")
+        return False
+    finally:
+        loop.close()
 
 # === 🌐 Flask App for Render ===
 @app.route("/")
@@ -849,7 +842,7 @@ def health():
 def run_now():
     """Manual trigger for the scheduled task"""
     threading.Thread(target=run_scheduled_task, daemon=True).start()
-    return {"message": "Scheduled task started manually"}
+    return {"message": "Scheduled task started manually", "timestamp": datetime.now().isoformat()}
 
 @app.route("/status")
 def status():
@@ -859,15 +852,22 @@ def status():
         s3_status = {
             "session_file": file_exists_in_s3(f"sessions/{USER_SESSION_FILE}"),
             "forwarded_file": file_exists_in_s3(f"data/{FORWARDED_FILE}"),
-            "data_file": file_exists_in_s3(f"data/{SCRAPED_24H_FILE}")
+            "scraped_data_file": file_exists_in_s3(f"data/{SCRAPED_DATA_FILE}")
         }
         
         # Load data stats
-        df = load_parquet_from_s3()
+        data = load_scraped_data_from_s3()
         data_stats = {
-            "total_records": len(df),
-            "categories": df['predicted_category'].value_counts().to_dict() if not df.empty and 'predicted_category' in df.columns else {}
+            "total_records": len(data),
+            "categories": {}
         }
+        
+        if data:
+            category_counts = {}
+            for post in data:
+                category = post.get('predicted_category', 'Unknown')
+                category_counts[category] = category_counts.get(category, 0) + 1
+            data_stats["categories"] = category_counts
         
         return {
             "status": "running",
@@ -891,7 +891,7 @@ def main():
     files_to_check = {
         "Session File": f"sessions/{USER_SESSION_FILE}",
         "Forwarded Messages": f"data/{FORWARDED_FILE}",
-        "Scraped Data": f"data/{SCRAPED_24H_FILE}"
+        "Scraped Data": f"data/{SCRAPED_DATA_FILE}"
     }
     
     for file_type, s3_key in files_to_check.items():
@@ -912,23 +912,32 @@ def main():
         # Schedule task to run every 24 hours
         schedule.every(24).hours.do(run_scheduled_task)
         
-        # Also run immediately on startup
-        print("⏰ Running initial task...")
+        # Also run immediately on startup (with 30 second delay to let everything initialize)
+        print("⏰ Running initial task in 30 seconds...")
+        time.sleep(30)
         run_scheduled_task()
         
         print("⏰ Scheduled task set to run every 24 hours")
+        print("📅 Next runs will be at:", datetime.now() + timedelta(hours=24))
         
         while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
+            try:
+                schedule.run_pending()
+                time.sleep(60)  # Check every minute
+            except Exception as e:
+                print(f"❌ Error in scheduler: {e}")
+                time.sleep(60)
     
     # Start scheduler in separate thread
-    threading.Thread(target=schedule_daily_task, daemon=True).start()
+    scheduler_thread = threading.Thread(target=schedule_daily_task, daemon=True)
+    scheduler_thread.start()
+    print("✅ Scheduler thread started")
     
     # Keep the main thread alive
     try:
         while True:
-            time.sleep(60)
+            time.sleep(3600)  # Sleep for 1 hour
+            print("💤 Main thread heartbeat...")
     except KeyboardInterrupt:
         print("👋 Shutting down...")
 
