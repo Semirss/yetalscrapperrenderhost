@@ -29,7 +29,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 
 # Target channel
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@Outis_ss1643")
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@Yetal_Search")
 
 # AWS S3 Configuration
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
